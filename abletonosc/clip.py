@@ -3,6 +3,7 @@ from typing import Tuple, Callable, Any, Optional
 from .handler import AbletonOSCHandler
 import Live
 
+
 class ClipHandler(AbletonOSCHandler):
     def __init__(self, manager):
         super().__init__(manager)
@@ -22,12 +23,11 @@ class ClipHandler(AbletonOSCHandler):
             to query its own index). Other alternatives include _always_ passing track/clip
             index to the callback, but this adds arg clutter to every single callback.
             """
-
             def clip_callback(params: Tuple[Any]) -> Tuple:
-                #--------------------------------------------------------------------------------
+                # --------------------------------------------------------------------------------
                 # Cast to int to support clients such as TouchOSC that, by default, pass all
                 # numeric arguments as float.
-                #--------------------------------------------------------------------------------
+                # --------------------------------------------------------------------------------
                 track_index, clip_index = int(params[0]), int(params[1])
                 track = self.song.tracks[track_index]
                 clip = track.clip_slots[clip_index].clip
@@ -54,7 +54,7 @@ class ClipHandler(AbletonOSCHandler):
             "is_playing",
             "is_recording",
             "length",
-            "playing_position"
+            "playing_position",
         ]
         properties_rw = [
             "color",
@@ -63,7 +63,8 @@ class ClipHandler(AbletonOSCHandler):
             "pitch_coarse",
             "pitch_fine",
             "looping",
-            "warping"
+            "warping",
+            "loop_end"
         ]
 
         for method in methods:
@@ -87,23 +88,31 @@ class ClipHandler(AbletonOSCHandler):
 
         def clip_add_notes(clip, params: Tuple[Any] = ()):
             notes = []
-            for offset in range(0, len(params), 5):
-                pitch, start_time, duration, velocity, mute = params[offset:offset + 5]
+            for offset in range(0, len(params), 8):
+                pitch, start_time, duration, velocity, mute, probability, velocity_deviation, release_velocity = params[
+                    offset:offset+8]
                 note = Live.Clip.MidiNoteSpecification(start_time=start_time,
                                                        duration=duration,
                                                        pitch=pitch,
                                                        velocity=velocity,
-                                                       mute=mute)
+                                                       mute=mute,
+                                                       probability=probability,
+                                                       velocity_deviation=velocity_deviation,
+                                                       release_velocity=release_velocity)
                 notes.append(note)
             clip.add_new_notes(tuple(notes))
 
         def clip_remove_notes(clip, params: Tuple[Any] = ()):
             start_pitch, pitch_span, start_time, time_span = params
-            clip.remove_notes_extended(start_pitch, pitch_span, start_time, time_span)
+            clip.remove_notes_extended(
+                start_pitch, pitch_span, start_time, time_span)
 
-        self.osc_server.add_handler("/live/clip/get/notes", create_clip_callback(clip_get_notes))
-        self.osc_server.add_handler("/live/clip/add/notes", create_clip_callback(clip_add_notes))
-        self.osc_server.add_handler("/live/clip/remove/notes", create_clip_callback(clip_remove_notes))
+        self.osc_server.add_handler(
+            "/live/clip/get/notes", create_clip_callback(clip_get_notes))
+        self.osc_server.add_handler(
+            "/live/clip/add/notes", create_clip_callback(clip_add_notes))
+        self.osc_server.add_handler(
+            "/live/clip/remove/notes", create_clip_callback(clip_remove_notes))
 
         # TODO: tidy up and generalise this
         self.clip_listeners = {}
@@ -114,10 +123,12 @@ class ClipHandler(AbletonOSCHandler):
 
             def playing_position_changed_callback():
                 osc_address = "/live/clip/get/playing_position"
-                self.osc_server.send(osc_address, (track_index, clip_index, clip.playing_position))
+                self.osc_server.send(
+                    osc_address, (track_index, clip_index, clip.playing_position))
 
             clip_remove_playing_position_listener(track_clip_index)
-            clip.add_playing_position_listener(playing_position_changed_callback)
+            clip.add_playing_position_listener(
+                playing_position_changed_callback)
             self.clip_listeners[track_clip_index] = playing_position_changed_callback
 
         def clip_remove_playing_position_listener(track_clip_index, params: Tuple[Any] = ()):
@@ -125,7 +136,8 @@ class ClipHandler(AbletonOSCHandler):
             clip = self.song.tracks[track_index].clip_slots[clip_index].clip
 
             if track_clip_index in self.clip_listeners.keys():
-                clip.remove_playing_position_listener(self.clip_listeners[track_clip_index])
+                clip.remove_playing_position_listener(
+                    self.clip_listeners[track_clip_index])
                 del self.clip_listeners[track_clip_index]
 
         self.osc_server.add_handler("/live/clip/start_listen/playing_position",
@@ -136,18 +148,20 @@ class ClipHandler(AbletonOSCHandler):
         def note_name_to_midi(name):
             """ Maps a MIDI note name (D3, C#6) to a value.
             Assumes that middle C is C4. """
-            note_names = [["C"],
-                          ["C#", "Db"],
-                          ["D"],
-                          ["D#", "Eb"],
-                          ["E"],
-                          ["F"],
-                          ["F#", "Gb"],
-                          ["G"],
-                          ["G#", "Ab"],
-                          ["A"],
-                          ["A#", "Bb"],
-                          ["B"]]
+            note_names = [
+                ["C"],
+                ["C#", "Db"],
+                ["D"],
+                ["D#", "Eb"],
+                ["E"],
+                ["F"],
+                ["F#", "Gb"],
+                ["G"],
+                ["G#", "Ab"],
+                ["A"],
+                ["A#", "Bb"],
+                ["B"]
+            ]
 
             for index, names in enumerate(note_names):
                 if name in names:
@@ -155,7 +169,6 @@ class ClipHandler(AbletonOSCHandler):
             return None
 
         def clips_filter_handler(params: Tuple):
-            # TODO: Pre-cache clip notes
             note_indices = [note_name_to_midi(name) for name in params]
             regex = "([_-])([A-G][A-G#b1-9-]*)$"
 
@@ -165,12 +178,15 @@ class ClipHandler(AbletonOSCHandler):
                     if clip_slot.has_clip:
                         clip = clip_slot.clip
                         clip_name = clip.name
+                        self.logger.info(clip_name)
                         match = re.search(regex, clip_name)
                         if match:
                             clip_notes_str = match.group(2)
-                            clip_notes_str = re.sub("[1-9]", "", clip_notes_str)
+                            clip_notes_str = re.sub(
+                                "[1-9]", "", clip_notes_str)
                             clip_notes_list = clip_notes_str.split("-")
-                            clip_notes_list = [note_name_to_midi(name) for name in clip_notes_list]
+                            clip_notes_list = [note_name_to_midi(
+                                name) for name in clip_notes_list]
                             if all(note in note_indices for note in clip_notes_list):
                                 clip.muted = False
                             else:
